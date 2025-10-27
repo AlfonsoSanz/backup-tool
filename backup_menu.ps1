@@ -1,13 +1,10 @@
 Add-Type -AssemblyName System.Windows.Forms
 
 # -------------------- Configuration --------------------
-$desktopPath = [Environment]::GetFolderPath("Desktop")
-Set-Location -Path $desktopPath # For relative paths
-
-$configPath = "$PSScriptRoot\config.json"
+$configPath = "config.json"
 $config = try { If (Test-Path $configPath -PathType Leaf) { Get-Content -Raw $configPath | ConvertFrom-Json } Else { "" } } catch { @{} }
-$defaultSources = If ($config.sources -is [string]) { $config.sources } Else { "C:\example.txt,relative folder path" }
-$defaultDestination = If ($config.destination -is [string]) { $config.destination } Else { "$desktopPath\Backups" }
+$defaultSources = If ($config.sources -is [string]) { $config.sources } Else { "example.txt,C:\folder name" }
+$defaultDestination = If ($config.destination -is [string]) { $config.destination } Else { "Backups" }
 $defaultInterval = If ($config.interval -is [int]) { $config.interval } Else { 600 }   # in seconds
 $minimizeToTray = If ($config.minimizeToTray -is [bool]) { $config.minimizeToTray } Else { $true }
 $compression = If ($config.compression -is [bool]) { [bool]$config.compression } Else { $false }
@@ -26,7 +23,7 @@ function Test-Destination([string]$Destination, [string]$ErrorMsg = "") {
 }
 
 function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Compression) {
-    $sourcesArray = $Sources -split ',' | Where-Object { $_ -ne '' }
+    $sourcesArray = $Sources -split ','
     if ($sourcesArray.Count -eq 0) {
         Log "ERROR" "No valid source paths provided. Backup skipped"
         return
@@ -41,19 +38,18 @@ function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Co
 
     $t = (Get-Date).ToString("HH.mm.ss")
     $d = (Get-Date).ToString("dd_MM_yyyy")
-    $sourceItem = Get-Item $sourcesArray[0]
-    $newName = "$($sourceItem.Name) $d $t $Type"
+    $sourceName = Split-Path -Leaf $sourcesArray[0]
+    $newName = "$sourceName $d $t $Type"
 
     if ($Compression) {
         Log "TRACE" "Compressing $newName ..."
         Compress-Archive -Path $sourcesArray -DestinationPath "$Destination\$newName.zip" -Force
     }
     else {
-        # Create directory if multiple sources
+        Log "TRACE" "Copying $newName ..."
         if ($sourcesArray.Count -gt 1) {
             New-Item -ItemType Directory -Path "$Destination\$newName" -Force | Out-Null
         }
-        Log "TRACE" "Copying $newName ..."
         Copy-Item -Path $sourcesArray -Destination "$Destination\$newName" -Recurse -Force
     }
 }
@@ -153,12 +149,16 @@ $saveConfigTool.Add_Click({
             minimizeToTray = $minimizeToTray
             compression    = $compression
         }
-        New-Item -Path $configPath -ItemType File -Force | Out-Null
+        if (-not (Test-Path $configPath)) {
+            New-Item -Path $configPath -ItemType File -Force | Out-Null
+        }
         $config | ConvertTo-Json | Set-Content -Path $configPath
     })
 
 $openConfig.Add_Click({
-        New-Item -Path $configPath -ItemType File -Force | Out-Null
+        if (-not (Test-Path $configPath)) {
+            New-Item -Path $configPath -ItemType File -Force | Out-Null
+        }
         Invoke-Item $configPath
     })
 
@@ -177,7 +177,7 @@ $openSourceFolder.Add_Click({
     })
 
 $openBackupFolderTool.Add_Click({
-        if (Test-Destination $destinationBox.Text -eq $false) { Invoke-Item $destinationBox.Text }
+        if (Test-Destination $destinationBox.Text ". Cannot open" -eq $false) { Invoke-Item $destinationBox.Text }
     })
 
 $restoreTool.Add_Click({
