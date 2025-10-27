@@ -1,39 +1,43 @@
 Add-Type -AssemblyName System.Windows.Forms
 
-### Configuration
+# -------------------- Configuration --------------------
 $desktopPath = [Environment]::GetFolderPath("Desktop")
 Set-Location -Path $desktopPath # For relative paths
 
 $configPath = "$PSScriptRoot\config.json"
-$config = try { If (Test-Path $configPath) { Get-Content -Raw $configPath | ConvertFrom-Json } Else { "" } } catch { @{} }
-$defaultSources = If ($config.sources -is [string]) { $config.sources } Else { "$desktopPath\example.txt,relative path to folder" }
+$config = try { If (Test-Path $configPath -PathType Leaf) { Get-Content -Raw $configPath | ConvertFrom-Json } Else { "" } } catch { @{} }
+$defaultSources = If ($config.sources -is [string]) { $config.sources } Else { "C:\example.txt,relative folder path" }
 $defaultDestination = If ($config.destination -is [string]) { $config.destination } Else { "$desktopPath\Backups" }
 $defaultInterval = If ($config.interval -is [int]) { $config.interval } Else { 600 }   # in seconds
 $minimizeToTray = If ($config.minimizeToTray -is [bool]) { $config.minimizeToTray } Else { $true }
 $compression = If ($config.compression -is [bool]) { [bool]$config.compression } Else { $false }
 
+function Test-Destination([string]$Destination, [string]$ErrorMsg = "") {
+    if ([string]::IsNullOrWhiteSpace($Destination)) {
+        Log "ERROR" "Destination path empty$ErrorMsg"
+        return $false
+    }
+    if (Test-Path $Destination -PathType Leaf) {
+        Log "ERROR" "Destination is a file$ErrorMsg"
+        return $false
+    }
+    New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    return $true
+}
+
 function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Compression) {
-    # Validate source(s)
     $sourcesArray = $Sources -split ',' | Where-Object { $_ -ne '' }
     if ($sourcesArray.Count -eq 0) {
-        Log "[X]" "No valid source paths provided. Backup skipped"
+        Log "ERROR" "No valid source paths provided. Backup skipped"
         return
     }
     foreach ($s in $sourcesArray) {
         if (-not (Test-Path $s)) {
-            Log "[X]" "Source path '$s' does not exist. Backup skipped"
+            Log "ERROR" "Source path '$s' does not exist. Backup skipped"
             return
         }
     }
-    
-    # Validate destination
-    if ([string]::IsNullOrWhiteSpace($Destination)) {
-        Log "[X]" "Destination path empty. Backup skipped"
-        return
-    }
-    if (-not (Test-Path $Destination)) {
-        New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-    }
+    if (-not (Test-Destination $Destination ". Backup skipped" -eq $false)) { return }
 
     $t = (Get-Date).ToString("HH.mm.ss")
     $d = (Get-Date).ToString("dd_MM_yyyy")
@@ -41,7 +45,7 @@ function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Co
     $newName = "$($sourceItem.Name) $d $t $Type"
 
     if ($Compression) {
-        Log "[-]" "Compressing $newName ..."
+        Log "TRACE" "Compressing $newName ..."
         Compress-Archive -Path $sourcesArray -DestinationPath "$Destination\$newName.zip" -Force
     }
     else {
@@ -49,13 +53,13 @@ function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Co
         if ($sourcesArray.Count -gt 1) {
             New-Item -ItemType Directory -Path "$Destination\$newName" -Force | Out-Null
         }
-        Log "[-]" "Copying $newName ..."
+        Log "TRACE" "Copying $newName ..."
         Copy-Item -Path $sourcesArray -Destination "$Destination\$newName" -Recurse -Force
     }
 }
 
 
-### Form
+# -------------------- Form --------------------
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "Backup tool"
 $form.Size = New-Object System.Drawing.Size(440, 360)
@@ -63,7 +67,6 @@ $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedSingle
 $form.MaximizeBox = $false
 [int[]]$rowPositions = @(30, 60, 90, 130)
-
 
 # Toolstrip
 $toolStrip = New-Object System.Windows.Forms.ToolStrip
@@ -126,14 +129,15 @@ $logBox.ScrollBars = "Vertical"
 $logBox.ReadOnly = $true
 $form.Controls.Add($logBox)
 
-function Log([string]$Prefix, [string]$Msg) {
-    $logBox.AppendText("$Prefix $(Get-Date -Format 'HH:mm:ss') - $Msg`r`n")
+function Log([string]$Level, [string]$Msg, [bool]$NewLine = $true) {
+    $lineEnding = if ($NewLine) { "`r`n" } else { "" }
+    $logBox.AppendText("[$Level]`t $(Get-Date -Format 'HH:mm:ss') - $Msg$lineEnding")
     $logBox.SelectionStart = $logBox.Text.Length
     $logBox.ScrollToCaret()
 }
 
 
-### Actions
+# ---------- Actions ----------
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = $defaultInterval * 1000
 $timer.Add_Tick({
@@ -141,7 +145,7 @@ $timer.Add_Tick({
     })
 
 $saveConfigTool.Add_Click({
-        Log "[+]" "Saving configuration to $configPath"
+        Log "INFO" "Saving configuration to $configPath"
         $config = [ordered]@{
             sources        = $sourceBox.Text
             destination    = $destinationBox.Text
@@ -154,20 +158,18 @@ $saveConfigTool.Add_Click({
     })
 
 $openConfig.Add_Click({
-        if (-not (Test-Path $configPath)) {
-            New-Item -Path $configPath -ItemType File -Force | Out-Null
-        }
+        New-Item -Path $configPath -ItemType File -Force | Out-Null
         Invoke-Item $configPath
     })
 
 $openSourceFolder.Add_Click({
         $sourcesArray = $sourceBox.Text -split ',' | Where-Object { $_ -ne '' }
         if ($sourcesArray.Count -eq 0) {
-            Log "[X]" "No valid source paths provided"
+            Log "ERROR" "No valid source paths provided"
             return
         }
         if (-not (Test-Path $sourcesArray[0])) {
-            Log "[X]" "Source path '$($sourcesArray[0])' does not exist"
+            Log "ERROR" "Source path '$($sourcesArray[0])' does not exist"
             return
         }
         $sourceItem = Get-Item $sourcesArray[0]
@@ -175,14 +177,7 @@ $openSourceFolder.Add_Click({
     })
 
 $openBackupFolderTool.Add_Click({
-        if ([string]::IsNullOrWhiteSpace($destinationBox.Text)) {
-            Log "[X]" "Destination path empty"
-            return
-        }
-        if (-not (Test-Path $destinationBox.Text)) {
-            New-Item -ItemType Directory -Path $destinationBox.Text -Force | Out-Null
-        }
-        Invoke-Item $destinationBox.Text
+        if (Test-Destination $destinationBox.Text -eq $false) { Invoke-Item $destinationBox.Text }
     })
 
 $restoreTool.Add_Click({
@@ -223,44 +218,52 @@ $destinationButton.Add_Click({
     })
 
 $backupButton.Add_Click({
-        Log "[+]" "Manual backup"
+        Log "INFO" "Manual backup"
         Backup "MANUAL" $sourceBox.Text $destinationBox.Text $compression
     })
 
 $startButton.Add_Click({
         $intervalSec = [int]$intervalBox.Text
         if ($intervalSec -le 0) {
-            Log "[!]" "Select a positive interval"
+            Log "ERROR" "Select a positive interval"
             return
         }
-        Log "[+]" "Starting backup"
+        Log "INFO" "Starting backup"
         Backup "AUTO" $sourceBox.Text $destinationBox.Text $compression
         $timer.Interval = [int]$intervalSec * 1000
         $timer.Start()
     })
 
 $stopButton.Add_Click({
-        Log "[+]" "Stopping backup"
+        Log "INFO" "Stopping backup"
         $timer.Stop()
     })
 
-### Tray
+
+# -------------------- Tray --------------------
 if ($minimizeToTray) {
     $tray = New-Object System.Windows.Forms.NotifyIcon
     $tray.Icon = [System.Drawing.SystemIcons]::Application
-    $tray.Visible = $true
+    $tray.Visible = $false
     $tray.Text = "Backup tool"
 
+    $global:firstMinimize = $true
     $form.add_Resize({
             if ($form.WindowState -eq [System.Windows.Forms.FormWindowState]::Minimized) {
                 $form.Hide()
-                # $tray.ShowBalloonTip(1000, "Backup Tool", "Application minimized to tray", [System.Windows.Forms.ToolTipIcon]::Info)
+                $tray.Visible = $true
+                if ($global:firstMinimize) {
+                    $global:firstMinimize = $false
+                    $ballonTipText = "Application minimized to tray, click to open (can be disabled in config)"
+                    $tray.ShowBalloonTip(1000, "Backup Tool", $ballonTipText, [System.Windows.Forms.ToolTipIcon]::Info)
+                }
             }
         })
 
-    $tray.add_DoubleClick({
+    $tray.Add_Click({
             $form.Show()
             $form.WindowState = [System.Windows.Forms.FormWindowState]::Normal
+            $tray.Visible = $false
         })
 }
 
