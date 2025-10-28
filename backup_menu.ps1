@@ -2,8 +2,9 @@ Add-Type -AssemblyName System.Windows.Forms
 
 # -------------------- Functions --------------------
 # Validation
-function Get-Sources([string]$Sources, [string]$ErrorMsg = "") {
+function Get-Sources([string]$Sources, [string]$ErrorMsg = "", [string]$Destination = "") {
     $sourcesArray = $Sources -split ','
+    $destinationFullName = If ($Destination) { (Get-Item $Destination).FullName } Else { "" }
     foreach ($s in $sourcesArray) {
         if ([string]::IsNullOrWhiteSpace($s)) {
             if ($ErrorMsg) { Log "ERROR" "Some source path is empty. $ErrorMsg" }
@@ -11,6 +12,11 @@ function Get-Sources([string]$Sources, [string]$ErrorMsg = "") {
         }
         if (-not (Test-Path $s)) {
             if ($ErrorMsg) { Log "ERROR" "Source path '$s' does not exist. $ErrorMsg" }
+            return $null
+        }
+        $sourceFullName = (Get-Item $s).FullName
+        if ($destinationFullName.StartsWith("$sourceFullName")) {   
+            if ($ErrorMsg) { Log "ERROR" "Recursion risk: Source path '$s' is a parent or equal to destination. $ErrorMsg" }
             return $null
         }
     }
@@ -37,7 +43,7 @@ function Get-Parent-Folder([string]$Path) {
 
 # Functionality
 function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Compression) {
-    $sourcesArray = Get-Sources $Sources "Backup skipped"
+    $sourcesArray = Get-Sources $Sources "Backup skipped" $Destination
     if (-not $sourcesArray) { return }
     if (-not (Test-Destination $Destination "Backup skipped")) { return }
 
@@ -48,9 +54,11 @@ function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Co
     Log "TRACE" "Backing up $backupName ..."
     if ($Compression) { Compress-Archive -Path $sourcesArray -DestinationPath "$Destination\$backupName.zip" -Force }
     else {
+        # TODO: robocopy /MIR to avoid copying unchanged files when not compressing
         if ($sourcesArray.Count -gt 1) { New-Item -ItemType Directory -Path "$Destination\$backupName" -Force | Out-Null }
         Copy-Item -Path $sourcesArray -Destination "$Destination\$backupName" -Recurse -Force
     }
+    if ($Error) { Log "Error" $Error; $Error.Clear() }
 }
 
 function Restore([string]$Backup, [string]$Destination) {
@@ -68,6 +76,7 @@ function Restore([string]$Backup, [string]$Destination) {
         $targetName = ($parts[0..($parts.Count - 4)] -join ' ')
         Copy-Item -Path $Backup -Destination "$Destination\$targetName" -Force
     }
+    if ($Error) { Log "Error" $Error; $Error.Clear() }
 }
 
 # Selection
@@ -273,7 +282,7 @@ $backupButton.Add_Click({
     })
 
 $startButton.Add_Click({
-        Log "INFO" "Starting backup"
+        Log "INFO" "Starting backup timer"
         $intervalSec = [int]$intervalBox.Text
         if ($intervalSec -le 0) {
             Log "ERROR" "Select a positive interval"
@@ -285,7 +294,8 @@ $startButton.Add_Click({
     })
 
 $stopButton.Add_Click({
-        Log "INFO" "Stopping backup"
+        $msg = If ($timer.Enabled) { "Stopping backup timer" } Else { "Timer is not running" }
+        Log "INFO" $msg
         $timer.Stop()
     })
 
