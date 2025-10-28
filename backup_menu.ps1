@@ -6,11 +6,11 @@ function Get-Sources([string]$Sources, [string]$ErrorMsg = "") {
     $sourcesArray = $Sources -split ','
     foreach ($s in $sourcesArray) {
         if ([string]::IsNullOrWhiteSpace($s)) {
-            Log "ERROR" "Some source path is empty. $ErrorMsg"
+            if ($ErrorMsg) { Log "ERROR" "Some source path is empty. $ErrorMsg" }
             return $null
         }
         if (-not (Test-Path $s)) {
-            Log "ERROR" "Source path '$s' does not exist. $ErrorMsg"
+            if ($ErrorMsg) { Log "ERROR" "Source path '$s' does not exist. $ErrorMsg" }
             return $null
         }
     }
@@ -19,11 +19,11 @@ function Get-Sources([string]$Sources, [string]$ErrorMsg = "") {
 
 function Test-Destination([string]$Destination, [string]$ErrorMsg = "") {
     if ([string]::IsNullOrWhiteSpace($Destination)) {
-        Log "ERROR" "Destination path empty. $ErrorMsg"
+        if ($ErrorMsg) { Log "ERROR" "Destination path empty. $ErrorMsg" }
         return $false
     }
     if (Test-Path $Destination -PathType Leaf) {
-        Log "ERROR" "Destination is a file. $ErrorMsg"
+        if ($ErrorMsg) { Log "ERROR" "Destination is a file. $ErrorMsg" }
         return $false
     }
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
@@ -39,9 +39,9 @@ function Get-Parent-Folder([string]$Path) {
 function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Compression) {
     $sourcesArray = Get-Sources $Sources "Backup skipped"
     if (-not $sourcesArray) { return }
-    if (-not (Test-Destination $Destination "Backup skipped" -eq $false)) { return }
+    if (-not (Test-Destination $Destination "Backup skipped")) { return }
 
-$backupName = If ($sourcesArray.Count -gt 1) { Get-Parent-Folder $sourcesArray[0] } Else { $sourcesArray[0] }
+    $backupName = If ($sourcesArray.Count -gt 1) { Get-Parent-Folder $sourcesArray[0] } Else { $sourcesArray[0] }
     $backupName = Split-Path $backupName -Leaf
     $backupName += " $((Get-Date).ToString("HH.mm.ss")) $((Get-Date).ToString("HH.mm.ss")) $Type"
 
@@ -71,22 +71,22 @@ function Restore([string]$Backup, [string]$Destination) {
 }
 
 # Selection
-function Select-Folder {
+function Select-Folder([string]$InitialDirectory) {
     $folderDialog = New-Object System.Windows.Forms.FolderBrowserDialog
     $folderDialog.Description = "Select a folder"
-    $folderDialog.SelectedPath = $PSScriptRoot
+    $folderDialog.SelectedPath = If ($InitialDirectory) { $InitialDirectory } Else { $PSScriptRoot }
     If ($folderDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $folderDialog.SelectedPath } Else { $null }
 }
 
-function Select-Files([bool]$MultiSelect) {
+function Select-Files([bool]$MultiSelect, [string]$InitialDirectory) {
     $fileDialog = New-Object System.Windows.Forms.OpenFileDialog
     $fileDialog.Title = If ($MultiSelect) { "Select one or more files" } Else { "Select a file" }
-    $fileDialog.InitialDirectory = $PSScriptRoot
+    $fileDialog.InitialDirectory = If ($InitialDirectory) { $InitialDirectory } Else { $PSScriptRoot }
     $fileDialog.Multiselect = $MultiSelect
     If ($fileDialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $fileDialog.FileNames -join "," } Else { $null }
 }
 
-function Select-Files-Or-Folder([bool]$MultiSelect) {
+function Select-Files-Or-Folder([bool]$MultiSelect, [string]$InitialDirectory) {
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Select Type"
     $form.Size = New-Object System.Drawing.Size(240, 120)
@@ -101,7 +101,7 @@ function Select-Files-Or-Folder([bool]$MultiSelect) {
     $buttonFolder.Add_Click({ $form.Tag = "Folder"; $form.Close() })
 
     $form.ShowDialog() | Out-Null
-    If ($form.Tag -eq "Folder") { Select-Folder } Elseif ($form.Tag -eq "Files") { Select-Files $MultiSelect } Else { $null }
+    If ($form.Tag -eq "Folder") { Select-Folder $InitialDirectory } Elseif ($form.Tag -eq "Files") { Select-Files $MultiSelect $InitialDirectory } Else { $null }
 }
 
 # UI
@@ -114,7 +114,7 @@ function New-Form-Item($Form, $ItemType, [string]$Text, [int[]]$Position, [int[]
     return $item
 }
 
-function Log([string]$Level, [string]$Msg, [bool]$NewSection = $false) {
+function Log([string]$Level, [string]$Msg) {
     if ($NewSection) { $logBox.AppendText("`r`n") }
     $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss')`t[$Level]`t$Msg")
     $logBox.AppendText("`r`n")
@@ -192,12 +192,12 @@ $form.Controls.Add($logBox)
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = $defaultInterval * 1000
 $timer.Add_Tick({
-        Log "INFO" "Automatic backup" $true
+        Log "INFO" "Automatic backup"
         Backup "AUTO" $sourceBox.Text $destinationBox.Text $compressionBox.Checked
     })
 
 $saveConfigTool.Add_Click({
-        Log "INFO" "Saving configuration to $configPath" $true
+        Log "INFO" "Saving configuration to $configPath"
         $config = [ordered]@{
             sources        = $sourceBox.Text
             destination    = $destinationBox.Text
@@ -210,25 +210,26 @@ $saveConfigTool.Add_Click({
     })
 
 $openConfig.Add_Click({
-        Log "INFO" "Opening config" $true
+        Log "INFO" "Opening config"
         if (-not (Test-Path $configPath)) { New-Item -Path $configPath -ItemType File -Force | Out-Null }
         Invoke-Item $configPath
     })
 
 $openSourceFolder.Add_Click({
-        Log "INFO" "Opening sources folder" $true
+        Log "INFO" "Opening sources folder"
         $sourcesArray = Get-Sources $sourceBox.Text "Cannot open"
         if (-not $sourcesArray) { return }
         Invoke-Item (Get-Parent-Folder $sourcesArray[0])
     })
 
 $openBackupFolderTool.Add_Click({
-        Log "INFO" "Opening backups folder" $true
-        if (Test-Destination $destinationBox.Text "Cannot open" -eq $false) { Invoke-Item $destinationBox.Text }
+        Log "INFO" "Opening backups folder"
+        if (Test-Destination $destinationBox.Text "Cannot open") { Invoke-Item $destinationBox.Text }
     })
 
 $restoreTool.Add_Click({
-        $backup = Select-Files-Or-Folder $false
+        $initialDirectory = If (Test-Destination $destinationBox.Text) { (Get-Item $destinationBox.Text).FullName } Else { "" }
+        $backup = Select-Files-Or-Folder $false $initialDirectory
         if (-not $backup) { return }
         $sourcesArray = Get-Sources $sourceBox.Text "Cannot locate sources directory. Restore skipped"
         if (-not $sourcesArray) { return }
@@ -254,22 +255,25 @@ $restoreTool.Add_Click({
     })
 
 $sourcesButton.Add_Click({
-        $sources = Select-Files-Or-Folder $true
+        $sourcesArray = Get-Sources $sourceBox.Text
+        $initialDirectory = If ($sourcesArray) { Get-Parent-Folder $sourcesArray[0] } Else { "" }
+        $sources = Select-Files-Or-Folder $true $initialDirectory
         if ($sources) { $sourceBox.Text = $sources }
     })
 
 $destinationButton.Add_Click({
-        $destinationFolder = Select-Folder
+        $initialDirectory = If (Test-Destination $destinationBox.Text) { (Get-Item $destinationBox.Text).FullName } Else { "" }
+        $destinationFolder = Select-Folder $initialDirectory
         if ($destinationFolder) { $destinationBox.Text = $destinationFolder }
     })
 
 $backupButton.Add_Click({
-        Log "INFO" "Manual backup" $true
+        Log "INFO" "Manual backup"
         Backup "MANUAL" $sourceBox.Text $destinationBox.Text $compressionBox.Checked
     })
 
 $startButton.Add_Click({
-        Log "INFO" "Starting backup" $true
+        Log "INFO" "Starting backup"
         $intervalSec = [int]$intervalBox.Text
         if ($intervalSec -le 0) {
             Log "ERROR" "Select a positive interval"
@@ -281,7 +285,7 @@ $startButton.Add_Click({
     })
 
 $stopButton.Add_Click({
-        Log "INFO" "Stopping backup" $true
+        Log "INFO" "Stopping backup"
         $timer.Stop()
     })
 
@@ -315,7 +319,6 @@ if ($minimizeToTray) {
 
 
 $form.Add_Shown({ $form.Activate() })
-# [void]$form.ShowDialog()
 $form.Show()    # Show the form and return control to the script
 Log "INFO" "Backup tool ready!"
-[System.Windows.Forms.Application]::Run($form) # Keep the application running
+[System.Windows.Forms.Application]::Run($form) # Keep the application running, even on the tray
