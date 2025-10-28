@@ -30,44 +30,43 @@ function Test-Destination([string]$Destination, [string]$ErrorMsg = "") {
     return $true
 }
 
+function Get-Parent-Folder([string]$Path) {
+    $item = Get-Item $Path
+    If ($item.PSIsContainer) { $item.Parent.FullName } Else { $item.Directory.FullName }
+}
+
 # Functionality
 function Backup([string]$Type, [string]$Sources, [string]$Destination, [bool]$Compression) {
     $sourcesArray = Get-Sources $Sources "Backup skipped"
     if (-not $sourcesArray) { return }
     if (-not (Test-Destination $Destination "Backup skipped" -eq $false)) { return }
 
-    $t = (Get-Date).ToString("HH.mm.ss")
-    $d = (Get-Date).ToString("yyyy_MM_dd")
-    $sourceName = Split-Path -Leaf $sourcesArray[0]
-    $newName = "$sourceName $d $t $Type"
+$backupName = If ($sourcesArray.Count -gt 1) { Get-Parent-Folder $sourcesArray[0] } Else { $sourcesArray[0] }
+    $backupName = Split-Path $backupName -Leaf
+    $backupName += " $((Get-Date).ToString("HH.mm.ss")) $((Get-Date).ToString("HH.mm.ss")) $Type"
 
-    if ($Compression) {
-        Log "TRACE" "Compressing $newName.zip ..."
-        Compress-Archive -Path $sourcesArray -DestinationPath "$Destination\$newName.zip" -Force
-    }
+    Log "TRACE" "Backing up $backupName ..."
+    if ($Compression) { Compress-Archive -Path $sourcesArray -DestinationPath "$Destination\$backupName.zip" -Force }
     else {
-        Log "TRACE" "Copying $newName ..."
-        if ($sourcesArray.Count -gt 1) { New-Item -ItemType Directory -Path "$Destination\$newName" -Force | Out-Null }
-        Copy-Item -Path $sourcesArray -Destination "$Destination\$newName" -Recurse -Force
+        if ($sourcesArray.Count -gt 1) { New-Item -ItemType Directory -Path "$Destination\$backupName" -Force | Out-Null }
+        Copy-Item -Path $sourcesArray -Destination "$Destination\$backupName" -Recurse -Force
     }
 }
 
 function Restore([string]$Backup, [string]$Destination) {
     $backupItem = Get-Item $Backup
-    $backupName = $backupItem.Name    
-    if ($backupItem.Extension -eq '.zip') {
-        Log "TRACE" "Restoring '$backupName' to '$Destination' ..."
-        Expand-Archive -Path $Backup -DestinationPath $Destination -Force
-    } else {
+    $backupName = $backupItem.Name
+    Log "TRACE" "Restoring '$backupName' to '$Destination' ..."
+    if ($backupItem.Extension -eq '.zip') { Expand-Archive -Path $Backup -DestinationPath $Destination -Force }
+    elseif ($backupItem.PSIsContainer) { Copy-Item -Path "$Backup\*" -Destination $Destination -Force -Recurse }
+    else {
         $parts = $backupName -split ' '
         if ($parts.Count -lt 4) {
             Log "ERROR" "Invalid backup name format for: '$backupName'. Should be: 'file name with extension YYYY_MM_DD HH.mm.ss MANUAL|AUTO|RESTORE'. Restore skipped."
             return
         }
         $targetName = ($parts[0..($parts.Count - 4)] -join ' ')
-        Log "TRACE" "Restoring '$backupName' to '$Destination' ..."
-        if ($backupItem.PSIsContainer) { $Backup += "\*" }
-        Copy-Item -Path $Backup -Destination "$Destination\$targetName" -Force -Recurse
+        Copy-Item -Path $Backup -Destination "$Destination\$targetName" -Force
     }
 }
 
@@ -95,7 +94,7 @@ function Select-Files-Or-Folder([bool]$MultiSelect) {
     $form.MaximizeBox = $false
     $form.StartPosition = "CenterScreen"
 
-    $label = New-Form-Item $form.Controls System.Windows.Forms.Label "Select what you want to choose:" @(25, 10) @(200, 20)
+    New-Form-Item $form.Controls System.Windows.Forms.Label "Select what you want to choose:" @(25, 10) @(200, 20) | Out-Null
     $buttonFiles = New-Form-Item $form.Controls System.Windows.Forms.Button "File$(If ($MultiSelect) { '(s)' } Else { '' })" @(20, 40)
     $buttonFiles.Add_Click({ $form.Tag = "Files"; $form.Close() })
     $buttonFolder = New-Form-Item $form.Controls System.Windows.Forms.Button "Folder" @(120, 40)
@@ -115,9 +114,10 @@ function New-Form-Item($Form, $ItemType, [string]$Text, [int[]]$Position, [int[]
     return $item
 }
 
-function Log([string]$Level, [string]$Msg, [bool]$NewLine = $true) {
-    $lineEnding = if ($NewLine) { "`r`n" } else { "" }
-    $logBox.AppendText("[$Level]`t $(Get-Date -Format 'HH:mm:ss') - $Msg$lineEnding")
+function Log([string]$Level, [string]$Msg, [bool]$NewSection = $false) {
+    if ($NewSection) { $logBox.AppendText("`r`n") }
+    $logBox.AppendText("$(Get-Date -Format 'HH:mm:ss')`t[$Level]`t$Msg")
+    $logBox.AppendText("`r`n")
     $logBox.SelectionStart = $logBox.Text.Length
     $logBox.ScrollToCaret()
 }
@@ -192,11 +192,12 @@ $form.Controls.Add($logBox)
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = $defaultInterval * 1000
 $timer.Add_Tick({
+        Log "INFO" "Automatic backup" $true
         Backup "AUTO" $sourceBox.Text $destinationBox.Text $compressionBox.Checked
     })
 
 $saveConfigTool.Add_Click({
-        Log "INFO" "Saving configuration to $configPath"
+        Log "INFO" "Saving configuration to $configPath" $true
         $config = [ordered]@{
             sources        = $sourceBox.Text
             destination    = $destinationBox.Text
@@ -209,31 +210,31 @@ $saveConfigTool.Add_Click({
     })
 
 $openConfig.Add_Click({
+        Log "INFO" "Opening config" $true
         if (-not (Test-Path $configPath)) { New-Item -Path $configPath -ItemType File -Force | Out-Null }
         Invoke-Item $configPath
     })
 
 $openSourceFolder.Add_Click({
+        Log "INFO" "Opening sources folder" $true
         $sourcesArray = Get-Sources $sourceBox.Text "Cannot open"
         if (-not $sourcesArray) { return }
-        $sourceItem = Get-Item $sourcesArray[0]
-        $parentPath = Split-Path -Path $sourceItem.FullName -Parent
-        Invoke-Item $parentPath
+        Invoke-Item (Get-Parent-Folder $sourcesArray[0])
     })
 
 $openBackupFolderTool.Add_Click({
+        Log "INFO" "Opening backups folder" $true
         if (Test-Destination $destinationBox.Text "Cannot open" -eq $false) { Invoke-Item $destinationBox.Text }
     })
 
 $restoreTool.Add_Click({
         $backup = Select-Files-Or-Folder $false
         if (-not $backup) { return }
-        $sourcesArray = Get-Sources $sourceBox.Text "Restore skipped"
+        $sourcesArray = Get-Sources $sourceBox.Text "Cannot locate sources directory. Restore skipped"
         if (-not $sourcesArray) { return }
-        $sourceItem = Get-Item $sourcesArray[0]
-        $sourceFolder = Split-Path -Path $sourceItem.FullName -Parent
+        $parentPath = Get-Parent-Folder $sourcesArray[0]
         $confirm = [System.Windows.Forms.MessageBox]::Show(
-            "Are you sure you want to restore '$backup' to '$sourceFolder'?",
+            "Are you sure you want to restore '$backup' to '$parentPath'?",
             "Confirm Restore",
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Warning
@@ -245,11 +246,11 @@ $restoreTool.Add_Click({
             [System.Windows.Forms.MessageBoxButtons]::YesNo,
             [System.Windows.Forms.MessageBoxIcon]::Warning
         )
+        Log "INFO" "Restoring backup" $true
         if ($makeBackup -eq [System.Windows.Forms.DialogResult]::Yes) {
             Backup "RESTORE" $sourceBox.Text $destinationBox.Text $compressionBox.Checked
         }
-        Log "INFO" "Restoring backup"
-        Restore $backup $sourceFolder
+        Restore $backup $parentPath
     })
 
 $sourcesButton.Add_Click({
@@ -263,24 +264,24 @@ $destinationButton.Add_Click({
     })
 
 $backupButton.Add_Click({
-        Log "INFO" "Manual backup"
+        Log "INFO" "Manual backup" $true
         Backup "MANUAL" $sourceBox.Text $destinationBox.Text $compressionBox.Checked
     })
 
 $startButton.Add_Click({
+        Log "INFO" "Starting backup" $true
         $intervalSec = [int]$intervalBox.Text
         if ($intervalSec -le 0) {
             Log "ERROR" "Select a positive interval"
             return
         }
-        Log "INFO" "Starting backup"
         Backup "AUTO" $sourceBox.Text $destinationBox.Text $compressionBox.Checked
         $timer.Interval = [int]$intervalSec * 1000
         $timer.Start()
     })
 
 $stopButton.Add_Click({
-        Log "INFO" "Stopping backup"
+        Log "INFO" "Stopping backup" $true
         $timer.Stop()
     })
 
@@ -316,4 +317,5 @@ if ($minimizeToTray) {
 $form.Add_Shown({ $form.Activate() })
 # [void]$form.ShowDialog()
 $form.Show()    # Show the form and return control to the script
+Log "INFO" "Backup tool ready!"
 [System.Windows.Forms.Application]::Run($form) # Keep the application running
